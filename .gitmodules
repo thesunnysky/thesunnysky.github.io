@@ -1,5 +1,5 @@
 [submodule "themes/next"]
 	path = themes/next
-	url = https://github.com/thesunnysky/thesunnysky.github.io.git
+	url = https://github.com/thesunnysky/hexo-theme-next.git
 	branch = usr
 
