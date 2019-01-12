@@ -7,15 +7,13 @@ categories:
 - redis
 ---
 
-​	Redis针对List操作提供了blocking command， 其中主要包括`BRPOP`，` BLPOP`，`BRPOPLPUSH`三个命令，这些命令针对List来完成阻塞式的pop操作，阻塞的逻辑是如果db中pop的key存在，则能够顺利完成pop操作，如果pop的key不存在, client将会阻塞，直到有其他客户端通过`*PUSH`命令想db中push指定的key（不讨论阻塞超时的问题），下面我们主要来了解一下redis是如何实现Blocking POP操作的，redis版本为`4.0.12`;
+​	Redis针对List操作提供了`BRPOP`，` BLPOP`，`BRPOPLPUSH`三个阻塞式的POP命令, 阻塞的逻辑是如果db中pop的key存在，则能够顺利完成pop操作，如果pop的key不存在, client将会阻塞，直到有其他客户端通过PUSH操作想db中push指定的key, 或者等待阻塞超时，下面主要分析一下Redis List的Blocking POP操作，对应redis版本为`4.0.12`;
 
 <!--more-->
 
 ## Block Client
 
-​	Redis `redisServer`结构体中记录了有两个list，
-
-​        `BRPOP` 和`BLPOP`命令均由调用函数`blockingPopGenericCommand`来实现，具体的函数如下：
+​       Redis的 `BRPOP` 和`BLPOP`命令均由调用函数`blockingPopGenericCommand`来实现，具体的函数如下：
 
 ```
 /* Blocking RPOP/LPOP */
@@ -78,10 +76,7 @@ void blockingPopGenericCommand(client *c, int where) {
 
 1. 首先，server会在dict中查看目标key是否存在，如果key存在则该次pop操作不会被阻塞，由于pop操作只支持list类型，所有需要对key的value类型进行检查，如果不是list类型，则会向client报错，如果是list类型，则进行后续的处理;
 2. 在key存在的情况下，server的对`B*POP`的操作和非阻塞的POP操作是完全相同的，server的做法也只是将client原始的请求命令中的`B*POP`命令替换成`非阻塞POP`命令，同时保持命令的参数不变，重请求命令通过函数`rewriteClientCommandVector` 重写到client的请求中;
-
-以上是key在存在的情况下server的处理，下面我们主要看下在key不存在或list为空的情况下，server是如何处理的;
-
-​	在server中client请求的key不存在时后者key对应的list为空，server将阻塞请求的client，核心的处理思想是本次命令处理不会回复client，同时将该client的`flags`标志置位`BLOCKED_LIST`,这样后续的main loop循环中也将之际跳过（阻塞）对该client的请求命令的处理;
+3. 在key不存在或者list为空时, server将阻塞请求的client，核心的处理思想是本次命令处理不会回复client，同时将该client的`flags`标志置位`BLOCKED_LIST`, 这样后续的redis loop循环中也将直接跳过对阻塞client处理;
 
 1. 在上面`blockingPopGenericCommand`函数中，如果key对应的list不存在或为空，将会调用`blockForKeys`函数：
 
@@ -121,7 +116,7 @@ void blockingPopGenericCommand(client *c, int where) {
    }
    ```
 
-   server端的client结构体中维护了一个`blockingState`类型的struct`client->bpop.keys`，该结构其记录了该client所阻塞等待的所有的list，在将要阻塞该client时，需要在该结构中增加client阻塞等待的list;
+   server中的client结构体中维护了一个`blockingState`类型的struct:`client->bpop.keys`，该结构其记录了该client所阻塞等待的所有的list，在将要阻塞该client时，需要在该结构中增加client阻塞等待的list;
 
    ```
    typedef struct blockingState {
@@ -347,40 +342,4 @@ void handleClientsBlockedOnLists(void) {
 
 4.  最终检查目标list是否已经被pop为空, 如果为空,则会从dict中删除该记录;
 
-   
-
-redisServer还存在其他机制引起的client的阻塞, 这里不对其他的block及unblock机制做进一步的阐述了;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-未完待续...
+ 
