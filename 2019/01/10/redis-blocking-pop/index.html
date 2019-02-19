@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<html class="theme-next mist" lang="zh-Hans">
+<head><meta name="generator" content="Hexo 3.8.0">
+  <meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/font-awesome.min.css?v=4.6.2">
+
+<link rel="stylesheet" href="/css/main.css?v=6.7.0">
+
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png?v=6.7.0">
+
+
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png?v=6.7.0">
+
+
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png?v=6.7.0">
+
+
+  <link rel="mask-icon" href="/images/logo.svg?v=6.7.0" color="#222">
+
+
+
+
+
+
+
+<script id="hexo.configurations">
+  var NexT = window.NexT || {};
+  var CONFIG = {
+    root: '/',
+    scheme: 'Mist',
+    version: '6.7.0',
+    sidebar: {"position":"right","display":"hide","offset":12,"b2t":false,"scrollpercent":false,"onmobile":false},
+    fancybox: false,
+    fastclick: false,
+    lazyload: false,
+    tabs: true,
+    motion: {"enable":false,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},
+    algolia: {
+      applicationID: '',
+      apiKey: '',
+      indexName: '',
+      hits: {"per_page":10},
+      labels: {"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}
+    }
+  };
+</script>
+
+
+  
+
+
+
+
+  <meta name="description" content="​    Redis针对List操作提供了BRPOP，BLPOP，BRPOPLPUSH三个阻塞式的POP命令, 阻塞的逻辑是如果db中pop的key存在，则能够顺利完成pop操作，如果pop的key不存在, client将会阻塞，直到有其他客户端通过PUSH操作想db中push指定的key, 或者等待阻塞超时，下面主要分析一下Redis List的Blocking POP操作，对应redis版本为">
+<meta name="keywords" content="redis">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Redis Blocking Pop 机制">
+<meta property="og:url" content="http://yoursite.com/2019/01/10/redis-blocking-pop/index.html">
+<meta property="og:site_name" content="SUN">
+<meta property="og:description" content="​    Redis针对List操作提供了BRPOP，BLPOP，BRPOPLPUSH三个阻塞式的POP命令, 阻塞的逻辑是如果db中pop的key存在，则能够顺利完成pop操作，如果pop的key不存在, client将会阻塞，直到有其他客户端通过PUSH操作想db中push指定的key, 或者等待阻塞超时，下面主要分析一下Redis List的Blocking POP操作，对应redis版本为">
+<meta property="og:locale" content="zh-Hans">
+<meta property="og:updated_time" content="2019-02-19T01:48:58.138Z">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Redis Blocking Pop 机制">
+<meta name="twitter:description" content="​    Redis针对List操作提供了BRPOP，BLPOP，BRPOPLPUSH三个阻塞式的POP命令, 阻塞的逻辑是如果db中pop的key存在，则能够顺利完成pop操作，如果pop的key不存在, client将会阻塞，直到有其他客户端通过PUSH操作想db中push指定的key, 或者等待阻塞超时，下面主要分析一下Redis List的Blocking POP操作，对应redis版本为">
+
+
+
+
+
+
+  <link rel="canonical" href="http://yoursite.com/2019/01/10/redis-blocking-pop/">
+
+
+
+<script id="page.configurations">
+  CONFIG.page = {
+    sidebar: "",
+  };
+</script>
+
+  <title>Redis Blocking Pop 机制 | SUN</title>
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .motion-element,
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-title { opacity: initial; }
+
+  .use-motion .logo,
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage" lang="zh-Hans">
+
+  
+  
+    
+  
+
+  <div class="container sidebar-position-right page-post-detail">
+    <div class="headband"></div>
+
+    <header id="header" class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-wrapper">
+  <div class="site-meta">
+    
+
+    <div class="custom-logo-site-title">
+      <a href="/" class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">SUN</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+    
+      
+        <p class="site-subtitle">每一个不曾起舞的一天,都是对声明莫大的辜负...</p>
+      
+    
+    
+  </div>
+
+  <div class="site-nav-toggle">
+    <button aria-label="Toggle navigation bar">
+      <span class="btn-bar"></span>
+      <span class="btn-bar"></span>
+      <span class="btn-bar"></span>
+    </button>
+  </div>
+</div>
+
+
+
+<nav class="site-nav">
+  
+    <ul id="menu" class="menu">
+      
+        
+        
+        
+          
+          <li class="menu-item menu-item-home">
+
+    
+    
+    
+      
+    
+
+    
+
+    <a href="/" rel="section"><i class="menu-item-icon fa fa-fw fa-home"></i> <br>Home</a>
+
+  </li>
+        
+        
+        
+          
+          <li class="menu-item menu-item-archives">
+
+    
+    
+    
+      
+    
+
+    
+
+    <a href="/archives/" rel="section"><i class="menu-item-icon fa fa-fw fa-archive"></i> <br>Archives</a>
+
+  </li>
+        
+        
+        
+          
+          <li class="menu-item menu-item-categories">
+
+    
+    
+    
+      
+    
+
+    
+
+    <a href="/categories/" rel="section"><i class="menu-item-icon fa fa-fw fa-th"></i> <br>Categories</a>
+
+  </li>
+        
+        
+        
+          
+          <li class="menu-item menu-item-tags">
+
+    
+    
+    
+      
+    
+
+    
+
+    <a href="/tags/" rel="section"><i class="menu-item-icon fa fa-fw fa-tags"></i> <br>Tags</a>
+
+  </li>
+        
+        
+        
+          
+          <li class="menu-item menu-item-about">
+
+    
+    
+    
+      
+    
+
+    
+
+    <a href="/about/" rel="section"><i class="menu-item-icon fa fa-fw fa-user"></i> <br>About</a>
+
+  </li>
+
+      
+      
+        <li class="menu-item menu-item-search">
+          
+            <a href="javascript:;" class="popup-trigger">
+          
+            
+              <i class="menu-item-icon fa fa-search fa-fw"></i> <br>Search</a>
+        </li>
+      
+    </ul>
+  
+
+  
+    
+
+  
+
+  
+    <div class="site-search">
+      
+  
+  <div class="algolia-popup popup search-popup">
+    <div class="algolia-search">
+      <div class="algolia-search-input-icon">
+        <i class="fa fa-search"></i>
+      </div>
+      <div class="algolia-search-input" id="algolia-search-input"></div>
+    </div>
+
+    <div class="algolia-results">
+      <div id="algolia-stats"></div>
+      <div id="algolia-hits"></div>
+      <div id="algolia-pagination" class="algolia-pagination"></div>
+    </div>
+
+    <span class="popup-btn-close">
+      <i class="fa fa-times-circle"></i>
+    </span>
+  </div>
+
+
+
+
+    </div>
+  
+</nav>
+
+
+
+  
+
+
+
+</div>
+    </header>
+
+    
+
+
+    <main id="main" class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+          <div id="content" class="content">
+            
+
+  <div id="posts" class="posts-expand">
+    
+
+  
+
+  
+  
+  
+
+  
+
+  <article class="post post-type-normal" itemscope itemtype="http://schema.org/Article">
+  
+  
+  
+  <div class="post-block">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2019/01/10/redis-blocking-pop/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="name" content="SUN">
+      <meta itemprop="description" content>
+      <meta itemprop="image" content="/images/avatar.gif">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="SUN">
+    </span>
+
+    
+      <header class="post-header">
+
+        
+        
+          <h1 class="post-title" itemprop="name headline">Redis Blocking Pop 机制
+
+              
+            
+          </h1>
+        
+
+        <div class="post-meta">
+          <span class="post-time">
+
+            
+            
+            
+
+            
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              
+                <span class="post-meta-item-text">Posted on</span>
+              
+
+              
+                
+              
+
+              <time title="Created: 2019-01-10 22:19:31" itemprop="dateCreated datePublished" datetime="2019-01-10T22:19:31+00:00">2019-01-10</time>
+            
+
+            
+              
+
+              
+                
+                <span class="post-meta-divider">|</span>
+                
+
+                <span class="post-meta-item-icon">
+                  <i class="fa fa-calendar-check-o"></i>
+                </span>
+                
+                  <span class="post-meta-item-text">Edited on</span>
+                
+                <time title="Modified: 2019-02-19 01:48:58" itemprop="dateModified" datetime="2019-02-19T01:48:58+00:00">2019-02-19</time>
+              
+            
+          </span>
+
+          
+            <span class="post-category">
+            
+              <span class="post-meta-divider">|</span>
+            
+              <span class="post-meta-item-icon">
+                <i class="fa fa-folder-o"></i>
+              </span>
+              
+                <span class="post-meta-item-text">In</span>
+              
+              
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing"><a href="/categories/redis/" itemprop="url" rel="index"><span itemprop="name">redis</span></a></span>
+
+                
+                
+              
+            </span>
+          
+
+          
+            
+          
+
+          
+          
+
+          
+            <span class="post-meta-divider">|</span>
+            <span class="post-meta-item-icon">
+            <i class="fa fa-eye"></i>
+             Views:  
+            <span class="busuanzi-value" id="busuanzi_value_page_pv"></span>
+            </span>
+          
+
+          
+
+          
+
+        </div>
+      </header>
+    
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+      
+
+      
+        <p>​    Redis针对List操作提供了<code>BRPOP</code>，<code>BLPOP</code>，<code>BRPOPLPUSH</code>三个阻塞式的POP命令, 阻塞的逻辑是如果db中pop的key存在，则能够顺利完成pop操作，如果pop的key不存在, client将会阻塞，直到有其他客户端通过PUSH操作想db中push指定的key, 或者等待阻塞超时，下面主要分析一下Redis List的Blocking POP操作，对应redis版本为<code>4.0.12</code>;</p>
+<a id="more"></a>
+<h2 id="Block-Client"><a href="#Block-Client" class="headerlink" title="Block Client"></a>Block Client</h2><p>​       Redis的 <code>BRPOP</code> 和<code>BLPOP</code>命令均由调用函数<code>blockingPopGenericCommand</code>来实现，具体的函数如下：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br></pre></td><td class="code"><pre><span class="line">/* Blocking RPOP/LPOP */</span><br><span class="line">void blockingPopGenericCommand(client *c, int where) &#123;</span><br><span class="line">    robj *o;</span><br><span class="line">    mstime_t timeout;</span><br><span class="line">    int j;</span><br><span class="line"></span><br><span class="line">    if (getTimeoutFromObjectOrReply(c,c-&gt;argv[c-&gt;argc-1],&amp;timeout,UNIT_SECONDS)</span><br><span class="line">        != C_OK) return;</span><br><span class="line"></span><br><span class="line">    for (j = 1; j &lt; c-&gt;argc-1; j++) &#123;</span><br><span class="line">        o = lookupKeyWrite(c-&gt;db,c-&gt;argv[j]);</span><br><span class="line">        if (o != NULL) &#123;</span><br><span class="line">            if (o-&gt;type != OBJ_LIST) &#123;</span><br><span class="line">                addReply(c,shared.wrongtypeerr);</span><br><span class="line">                return;</span><br><span class="line">            &#125; else &#123;</span><br><span class="line">                if (listTypeLength(o) != 0) &#123;</span><br><span class="line">                    /* Non empty list, this is like a non normal [LR]POP. */</span><br><span class="line">                    char *event = (where == LIST_HEAD) ? &quot;lpop&quot; : &quot;rpop&quot;;</span><br><span class="line">                    robj *value = listTypePop(o,where);</span><br><span class="line">                    serverAssert(value != NULL);</span><br><span class="line"></span><br><span class="line">                    addReplyMultiBulkLen(c,2);</span><br><span class="line">                    addReplyBulk(c,c-&gt;argv[j]);</span><br><span class="line">                    addReplyBulk(c,value);</span><br><span class="line">                    decrRefCount(value);</span><br><span class="line">                    notifyKeyspaceEvent(NOTIFY_LIST,event,</span><br><span class="line">                                        c-&gt;argv[j],c-&gt;db-&gt;id);</span><br><span class="line">                    if (listTypeLength(o) == 0) &#123;</span><br><span class="line">                        dbDelete(c-&gt;db,c-&gt;argv[j]);</span><br><span class="line">                        notifyKeyspaceEvent(NOTIFY_GENERIC,&quot;del&quot;,</span><br><span class="line">                                            c-&gt;argv[j],c-&gt;db-&gt;id);</span><br><span class="line">                    &#125;</span><br><span class="line">                    signalModifiedKey(c-&gt;db,c-&gt;argv[j]);</span><br><span class="line">                    server.dirty++;</span><br><span class="line"></span><br><span class="line">                    /* Replicate it as an [LR]POP instead of B[LR]POP. */</span><br><span class="line">                    rewriteClientCommandVector(c,2,</span><br><span class="line">                        (where == LIST_HEAD) ? shared.lpop : shared.rpop,</span><br><span class="line">                        c-&gt;argv[j]);</span><br><span class="line">                    return;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    /* If we are inside a MULTI/EXEC and the list is empty the only thing</span><br><span class="line">     * we can do is treating it as a timeout (even with timeout 0). */</span><br><span class="line">    if (c-&gt;flags &amp; CLIENT_MULTI) &#123;</span><br><span class="line">        addReply(c,shared.nullmultibulk);</span><br><span class="line">        return;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    /* If the list is empty or the key does not exists we must block */</span><br><span class="line">    blockForKeys(c, c-&gt;argv + 1, c-&gt;argc - 2, timeout, NULL);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ol>
+<li>首先，server会在dict中查看目标key是否存在，如果key存在则该次pop操作不会被阻塞，由于pop操作只支持list类型，所有需要对key的value类型进行检查，如果不是list类型，则会向client报错，如果是list类型，则进行后续的处理;</li>
+<li>在key存在的情况下，server的对<code>B*POP</code>的操作和非阻塞的POP操作是完全相同的，server的做法也只是将client原始的请求命令中的<code>B*POP</code>命令替换成<code>非阻塞POP</code>命令，同时保持命令的参数不变，重请求命令通过函数<code>rewriteClientCommandVector</code> 重写到client的请求中;</li>
+<li><p>在key不存在或者list为空时, server将阻塞请求的client，核心的处理思想是本次命令处理不会回复client，同时将该client的<code>flags</code>标志置位<code>BLOCKED_LIST</code>, 这样后续的redis loop循环中也将直接跳过对阻塞client处理;</p>
+</li>
+<li><p>在上面<code>blockingPopGenericCommand</code>函数中，如果key对应的list不存在或为空，将会调用<code>blockForKeys</code>函数：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">/* 为每一个blocking key在client-&gt;bpop.keys dict,记录了该client等待的所有key;</span><br><span class="line"> * 同时,client-&gt;db.blocking_keys(dict)记录了所有该db中等待该key的client(list);</span><br><span class="line"> */</span><br><span class="line">void blockForKeys(client *c, robj **keys, int numkeys, mstime_t timeout, robj *target) &#123;</span><br><span class="line">    dictEntry *de;</span><br><span class="line">    list *l;</span><br><span class="line">    int j;</span><br><span class="line">    ...</span><br><span class="line">    </span><br><span class="line">    for (j = 0; j &lt; numkeys; j++) &#123;</span><br><span class="line">        /* If the key already exists in the dict ignore it. */</span><br><span class="line">        if (dictAdd(c-&gt;bpop.keys,keys[j],NULL) != DICT_OK) continue;</span><br><span class="line">        incrRefCount(keys[j]);</span><br><span class="line"></span><br><span class="line">        /* And in the other &quot;side&quot;, to map keys -&gt; clients */</span><br><span class="line">        de = dictFind(c-&gt;db-&gt;blocking_keys,keys[j]);</span><br><span class="line">        if (de == NULL) &#123;</span><br><span class="line">            int retval;</span><br><span class="line"></span><br><span class="line">            /* For every key we take a list of clients blocked for it */</span><br><span class="line">            /* 为每一个blocking_key都创建一个list来记录有哪些clients在等待该key */</span><br><span class="line">            l = listCreate();</span><br><span class="line">            retval = dictAdd(c-&gt;db-&gt;blocking_keys,keys[j],l);</span><br><span class="line">            incrRefCount(keys[j]);</span><br><span class="line">            serverAssertWithInfo(c,keys[j],retval == DICT_OK);</span><br><span class="line">        &#125; else &#123;</span><br><span class="line">            l = dictGetVal(de);</span><br><span class="line">        &#125;</span><br><span class="line">        //将当前client加入到该key的blocking client list的尾部,这样在指定key到来时,也是先阻塞的client先被serve</span><br><span class="line">        listAddNodeTail(l,c);</span><br><span class="line">    &#125;</span><br><span class="line">    blockClient(c,BLOCKED_LIST);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>server中的client结构体中维护了一个<code>blockingState</code>类型的struct:<code>client-&gt;bpop.keys</code>，该结构其记录了该client所阻塞等待的所有的list，在将要阻塞该client时，需要在该结构中增加client阻塞等待的list;</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">typedef struct blockingState &#123;</span><br><span class="line">	...</span><br><span class="line">    /* BLOCKED_LIST */</span><br><span class="line">    dict *keys;             /* The keys we are waiting to terminate a blocking</span><br><span class="line">                             * operation such as BLPOP. Otherwise NULL. */</span><br><span class="line">    robj *target;           /* The key that should receive the element,</span><br><span class="line">	...</span><br><span class="line">&#125; blockingState;</span><br></pre></td></tr></table></figure>
+<p>同时在server中表征db的结构体<code>redisDb</code>中也记录了该db中所有存在client在阻塞等待的key，在dict类型的<code>redsiDb-&gt;blocking_keys</code>中记录，其字典的key是client请求的key，value是一个list，该list中记录了该key阻塞的所有client，最新被阻塞的client将被加入到list的尾部。 这样做的目的是在后续某个时刻有其它client对该key进行了push操作，那么server将会知道有哪些client在阻塞等待该key，并选出list的头元素，也就是最先被阻塞的client对其unblock;</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">typedef struct redisDb &#123;	</span><br><span class="line">	...</span><br><span class="line">    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/</span><br><span class="line">    dict *ready_keys;           /* Blocked keys that received a PUSH */</span><br><span class="line"> 	...</span><br><span class="line">&#125; redisDb;</span><br></pre></td></tr></table></figure>
+<p>在函数<code>blockForKeys</code>最后将通过<code>blockClient</code>函数对client的<code>flag</code>置位<code>CLIENT_BLOCKED</code>，表示当前client被阻塞，这样，后续的事件循环中都将不会处理该命令的请求缓冲区;</p>
+</li>
+</ol>
+<p>至此，server就完成了对该client的阻塞操作;</p>
+<h2 id="Unblock-Client"><a href="#Unblock-Client" class="headerlink" title="Unblock Client"></a>Unblock Client</h2><p>前面提到过，如果一个client在调用<code>B*POP</code>命令时被阻塞，此时需要有其他客户端对相应的list进行<code>PUSH</code>操作使的list不为空才能解除阻塞;</p>
+<p>​    在开始之前先说说一下unblock client操作涉及到的几个重要结构: <code>redisDb-&gt;blocking_keys</code>, <code></code>redisDb-&gt;ready_keys<code>和</code>redisServer-&gt;ready_keys`</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">typedef struct redisDb &#123;</span><br><span class="line">    ...</span><br><span class="line">    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/</span><br><span class="line">    dict *ready_keys;           /* Blocked keys that received a PUSH */</span><br><span class="line">    ...</span><br><span class="line">&#125; redisDb;</span><br></pre></td></tr></table></figure>
+<p><code>redisDb-&gt;blocking_keys</code> 是一个dict类型, 该dict中记录了当前db中所有client在阻塞等待的key; <code>redisDb-&gt;ready_keys</code> 也是一个dict类型, 该dict中记录了当前db中所有client在阻塞等待的key中有那些key是已经ready了的, 最阻塞的key进行push操作将会使该key变为ready状态;</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">struct redisServer &#123;</span><br><span class="line">	...</span><br><span class="line">	list *unblocked_clients; /* list of clients to unblock before next loop */</span><br><span class="line">    list *ready_keys;        /* List of readyList structures for BLPOP &amp; co */</span><br><span class="line">    ...</span><br><span class="line">&#125; redisServer;</span><br></pre></td></tr></table></figure>
+<p><code>redisServer-&gt;ready_keys</code>中记录了所有的已经ready的key, 值为<code>readyList</code>结构:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">typedef struct readyList &#123;</span><br><span class="line">    redisDb *db;</span><br><span class="line">    robj *key;</span><br><span class="line">&#125; readyList</span><br></pre></td></tr></table></figure>
+<p>通过该结构就可以同时知道该key所属的db;</p>
+<p>​    unblock client的过程也就是将push操作请求的key的加入到<code>redisServer-&gt;ready_keys</code> 中, 最终server每次处理完一条命令请求后都会去根据<code>redisServer-&gt;ready_keys</code> 中的内容来unblock相应的client;</p>
+<p>​    redis代码中<code>popGenericCommand</code>函数是redis <code>RPUSH和</code>和<code>LPUSH</code>的具体实现，</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">void pushGenericCommand(client *c, int where) &#123;</span><br><span class="line">    int j, pushed = 0;</span><br><span class="line">    robj *lobj = lookupKeyWrite(c-&gt;db,c-&gt;argv[1]);</span><br><span class="line">	...</span><br><span class="line">    for (j = 2; j &lt; c-&gt;argc; j++) &#123;</span><br><span class="line">        if (!lobj) &#123;</span><br><span class="line">            lobj = createQuicklistObject();</span><br><span class="line">            quicklistSetOptions(lobj-&gt;ptr, server.list_max_ziplist_size,</span><br><span class="line">                                server.list_compress_depth);</span><br><span class="line">            /* 将新创建的key加入到db中,由于是push操作,在该函数中同时也会调用</span><br><span class="line">             * signalListAsRead()函数来将新创建的key的加入到server-&gt;ready_keys</span><br><span class="line">             * 中,进而将在server每次处理一条命令后调用handleClientsBlockedOnLists</span><br><span class="line">             * 函数来unblock被BRPOP和BLPOP阻塞的client</span><br><span class="line">             */</span><br><span class="line">            dbAdd(c-&gt;db,c-&gt;argv[1],lobj);</span><br><span class="line">        &#125;</span><br><span class="line">        listTypePush(lobj,c-&gt;argv[j],where);</span><br><span class="line">        pushed++;</span><br><span class="line">    &#125;</span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>如果在push时请求的key不存在,server将会创建该key对应的list,并表用<code>dbAdd</code>将该kv将入到对应的db中, 并同时调用<code>signalListAsReady</code>函数来生成该key对应的<code>readyList</code>结构, 并插入到<code>redisServer-&gt;ready_keys</code> dict中; 在加入到<code>redisServer-&gt;ready_keys</code>之前需要先检查<code>redisDb-&gt;blocking_keys</code>中是否存在该key,只有在存在的情况下才表明有client在阻塞等待该key, 此时才将key加入到<code>redisServer-&gt;ready_keys</code>中, 同时如果<code>db-&gt;ready_keys</code>中已经存在该key, 表名该key已经加入到了<code>redisServer-&gt;ready_keys</code>中, 不会重复加入</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">void dbAdd(redisDb *db, robj *key, robj *val) &#123;</span><br><span class="line">    sds copy = sdsdup(key-&gt;ptr);</span><br><span class="line">    int retval = dictAdd(db-&gt;dict, copy, val);</span><br><span class="line">    ...</span><br><span class="line">    if (val-&gt;type == OBJ_LIST) signalListAsReady(db, key);</span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">void signalListAsReady(redisDb *db, robj *key) &#123;</span><br><span class="line">    readyList *rl;</span><br><span class="line"></span><br><span class="line">    /* No clients blocking for this key? No need to queue it. */</span><br><span class="line">    if (dictFind(db-&gt;blocking_keys,key) == NULL) return;</span><br><span class="line"></span><br><span class="line">    /* Key was already signaled? No need to queue it again. */</span><br><span class="line">    if (dictFind(db-&gt;ready_keys,key) != NULL) return;</span><br><span class="line"></span><br><span class="line">    /* Ok, we need to queue this key into server.ready_keys. */</span><br><span class="line">    rl = zmalloc(sizeof(*rl));</span><br><span class="line">    rl-&gt;key = key;</span><br><span class="line">    rl-&gt;db = db;</span><br><span class="line">    incrRefCount(key);</span><br><span class="line">    //将新push的key加入到server.ready_keys,等待handleClientsBlockedOnLists处理</span><br><span class="line">    listAddNodeTail(server.ready_keys,rl);</span><br><span class="line">	...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>在将ready的key加入到<code>server-&gt;ready_key</code>之后，后续就是在server每次处理命令请求后都会去检查<code>server-&gt;ready_key</code>, 如果不为空, 则为调用<code>handleClientsBlockedOnLists</code>函数来处理被阻塞的client;</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br></pre></td><td class="code"><pre><span class="line">void handleClientsBlockedOnLists(void) &#123;</span><br><span class="line">    while(listLength(server.ready_keys) != 0) &#123;</span><br><span class="line">        list *l;</span><br><span class="line"></span><br><span class="line">        /* Point server.ready_keys to a fresh list and save the current one</span><br><span class="line">         * locally. This way as we run the old list we are free to call</span><br><span class="line">         * signalListAsReady() that may push new elements in server.ready_keys</span><br><span class="line">         * when handling clients blocked into BRPOPLPUSH. */</span><br><span class="line">        l = server.ready_keys;</span><br><span class="line">        server.ready_keys = listCreate();</span><br><span class="line"></span><br><span class="line">        while(listLength(l) != 0) &#123;</span><br><span class="line">            listNode *ln = listFirst(l);</span><br><span class="line">            readyList *rl = ln-&gt;value;</span><br><span class="line"></span><br><span class="line">            /* First of all remove this key from db-&gt;ready_keys so that</span><br><span class="line">             * we can safely call signalListAsReady() against this key. */</span><br><span class="line">            dictDelete(rl-&gt;db-&gt;ready_keys,rl-&gt;key);</span><br><span class="line"></span><br><span class="line">            /* If the key exists and it&apos;s a list, serve blocked clients</span><br><span class="line">             * with data. */</span><br><span class="line">            robj *o = lookupKeyWrite(rl-&gt;db,rl-&gt;key);</span><br><span class="line">            if (o != NULL &amp;&amp; o-&gt;type == OBJ_LIST) &#123;</span><br><span class="line">                dictEntry *de;</span><br><span class="line"></span><br><span class="line">                /* We serve clients in the same order they blocked for</span><br><span class="line">                 * this key, from the first blocked to the last. */</span><br><span class="line">                de = dictFind(rl-&gt;db-&gt;blocking_keys,rl-&gt;key);</span><br><span class="line">                if (de) &#123;</span><br><span class="line">                    //获取所有该key block的client list</span><br><span class="line">                    list *clients = dictGetVal(de);</span><br><span class="line">                    int numclients = listLength(clients);</span><br><span class="line"></span><br><span class="line">                    while(numclients--) &#123;</span><br><span class="line">                        //取出最先被阻塞的client</span><br><span class="line">                        listNode *clientnode = listFirst(clients);</span><br><span class="line">                        client *receiver = clientnode-&gt;value;</span><br><span class="line">                        robj *dstkey = receiver-&gt;bpop.target;</span><br><span class="line">                        int where = (receiver-&gt;lastcmd &amp;&amp;</span><br><span class="line">                                     receiver-&gt;lastcmd-&gt;proc == blpopCommand) ?</span><br><span class="line">                                    LIST_HEAD : LIST_TAIL;</span><br><span class="line">                        //将目标list中pop出一个元素</span><br><span class="line">                        robj *value = listTypePop(o,where);</span><br><span class="line"></span><br><span class="line">                        if (value) &#123;</span><br><span class="line">                            /* Protect receiver-&gt;bpop.target, that will be</span><br><span class="line">                             * freed by the next unblockClient()</span><br><span class="line">                             * call. */</span><br><span class="line">                            if (dstkey) incrRefCount(dstkey);</span><br><span class="line">                            //unblock client</span><br><span class="line">                            unblockClient(receiver);</span><br><span class="line"></span><br><span class="line">                            //响应unblock的client</span><br><span class="line">                            if (serveClientBlockedOnList(receiver,</span><br><span class="line">                                rl-&gt;key,dstkey,rl-&gt;db,value,</span><br><span class="line">                                where) == C_ERR)</span><br><span class="line">                            &#123;</span><br><span class="line">                                /* If we failed serving the client we need</span><br><span class="line">                                 * to also undo the POP operation. */</span><br><span class="line">                                 	//unblock client失败,重新将元素加入到list中</span><br><span class="line">                                    listTypePush(o,value,where);</span><br><span class="line">                            &#125;</span><br><span class="line">                        &#125; else &#123;</span><br><span class="line">                            //如果从list pop出的元素为NULL,则将跳出循环,client将继续阻塞</span><br><span class="line">                            break;</span><br><span class="line">                        &#125;</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line"></span><br><span class="line">                if (listTypeLength(o) == 0) &#123;</span><br><span class="line">                	//如果list的长度为0,则从db中delete掉该list</span><br><span class="line">                    dbDelete(rl-&gt;db,rl-&gt;key);</span><br><span class="line">                &#125;</span><br><span class="line">                /* We don&apos;t call signalModifiedKey() as it was already called</span><br><span class="line">                 * when an element was pushed on the list. */</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            /* Free this item. */</span><br><span class="line">            decrRefCount(rl-&gt;key);</span><br><span class="line">            zfree(rl);</span><br><span class="line">            listDelNode(l,ln);</span><br><span class="line">        &#125;</span><br><span class="line">        listRelease(l); /* We have the new list on place at this point. */</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<ol>
+<li><p>server会遍历<code>server.ready_keys</code>中所有ready的key,获取该key阻塞的所有的client, 然后按照最先最先阻塞最先处理的原则, 来尝试unblock client;</p>
+</li>
+<li><p>清楚阻塞标记: 调用<code>unblockClient</code>函数来从<code>redisDb-&gt;blocking_keys</code>中移除该client,  清除<code>client-&gt;bpop.keys</code>记录的该client阻塞等待的所有key, 清除<code>client-&gt;flags</code>中的<code>CLIENT_BLOCKED</code>标志位, 并是将client加入到<code>redisServer-&gt;unblocked_clients</code>中;</p>
+</li>
+<li><p>会按照被阻塞client请求的命令(<code>BLPOP</code>, <code>BRPOP</code>或者<code>BRPOPLPUSH)</code>,从list合适的位置pop一个元素(此时list中可能不止一个元素), 来将该元素作为client的回复数据在函数<code>serveClientBlockedOnList</code>中回复给client(如果是<code>BRPOPLPUSH命令</code>则会执行响应的POP PUSH操作). 如果取出元素后回复client失败, 则会重新将该元素push到list中, 继续处理剩余被block的client;</p>
+<p>如果pop的数据为NULL, 表示当前list中已无元素,则会跳出循环, 结束对该ready key的处理, client将继续阻塞;</p>
+</li>
+<li><p>最终检查目标list是否已经被pop为空, 如果为空,则会从dict中删除该记录;</p>
+</li>
+</ol>
+
+      
+    </div>
+
+    
+
+    
+    
+    
+
+    
+
+    
+      
+    
+    
+
+    
+
+    <footer class="post-footer">
+      
+        <div class="post-tags">
+          
+            <a href="/tags/redis/" rel="tag"># redis</a>
+          
+        </div>
+      
+
+      
+      
+      
+
+      
+        <div class="post-nav">
+          <div class="post-nav-next post-nav-item">
+            
+          </div>
+
+          <span class="post-nav-divider"></span>
+
+          <div class="post-nav-prev post-nav-item">
+            
+              <a href="/2019/01/11/Re-Redis内部数据结构详解-sds/" rel="prev" title="Redis内部数据结构详解-sds.md">
+                Redis内部数据结构详解-sds.md <i class="fa fa-chevron-right"></i>
+              </a>
+            
+          </div>
+        </div>
+      
+
+      
+      
+    </footer>
+  </div>
+  
+  
+  
+  </article>
+
+
+  </div>
+
+
+          </div>
+          
+
+  
+    <div class="comments" id="comments">
+      <div id="lv-container" data-id="city" data-uid="MTAyMC80MjAwMi8xODU0OQ=="></div>
+    </div>
+
+  
+
+
+
+        </div>
+        
+          
+  
+  <div class="sidebar-toggle">
+    <div class="sidebar-toggle-line-wrap">
+      <span class="sidebar-toggle-line sidebar-toggle-line-first"></span>
+      <span class="sidebar-toggle-line sidebar-toggle-line-middle"></span>
+      <span class="sidebar-toggle-line sidebar-toggle-line-last"></span>
+    </div>
+  </div>
+
+  <aside id="sidebar" class="sidebar">
+    
+    <div class="sidebar-inner">
+
+      
+
+      
+        <ul class="sidebar-nav motion-element">
+          <li class="sidebar-nav-toc sidebar-nav-active" data-target="post-toc-wrap">
+            Table of Contents
+          </li>
+          <li class="sidebar-nav-overview" data-target="site-overview-wrap">
+            Overview
+          </li>
+        </ul>
+      
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-overview">
+          <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            
+              <p class="site-author-name" itemprop="name">SUN</p>
+              <p class="site-description motion-element" itemprop="description"></p>
+          </div>
+
+          
+            <nav class="site-state motion-element">
+              
+                <div class="site-state-item site-state-posts">
+                
+                  <a href="/archives/">
+                
+                    <span class="site-state-item-count">4</span>
+                    <span class="site-state-item-name">posts</span>
+                  </a>
+                </div>
+              
+
+              
+                
+                
+                <div class="site-state-item site-state-categories">
+                  <a href="/categories/index.html">
+                    
+                    
+                      
+                    
+                    <span class="site-state-item-count">1</span>
+                    <span class="site-state-item-name">categories</span>
+                  </a>
+                </div>
+              
+
+              
+                
+                
+                <div class="site-state-item site-state-tags">
+                  <a href="/tags/index.html">
+                    
+                    
+                      
+                    
+                      
+                    
+                    <span class="site-state-item-count">2</span>
+                    <span class="site-state-item-name">tags</span>
+                  </a>
+                </div>
+              
+            </nav>
+          
+
+          
+
+          
+            <div class="links-of-author motion-element">
+              
+                <span class="links-of-author-item">
+                  
+                  
+                    
+                  
+                  
+                    
+                  
+                  <a href="https://github.com/thesunnysky" title="GitHub &rarr; https://github.com/thesunnysky" rel="noopener" target="_blank"><i class="fa fa-fw fa-github"></i>GitHub</a>
+                </span>
+              
+                <span class="links-of-author-item">
+                  
+                  
+                    
+                  
+                  
+                    
+                  
+                  <a href="mailto:jianyungsun@gmail.com" title="E-Mail &rarr; mailto:jianyungsun@gmail.com" rel="noopener" target="_blank"><i class="fa fa-fw fa-envelope"></i>E-Mail</a>
+                </span>
+              
+            </div>
+          
+
+          
+
+          
+          
+
+          
+            
+          
+          
+
+        </div>
+      </div>
+
+      
+      <!--noindex-->
+        <div class="post-toc-wrap motion-element sidebar-panel sidebar-panel-active">
+          <div class="post-toc">
+
+            
+            
+            
+            
+
+            
+              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#Block-Client"><span class="nav-number">1.</span> <span class="nav-text">Block Client</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Unblock-Client"><span class="nav-number">2.</span> <span class="nav-text">Unblock Client</span></a></li></ol></div>
+            
+
+          </div>
+        </div>
+      <!--/noindex-->
+      
+
+      
+
+    </div>
+  </aside>
+
+
+        
+      </div>
+    </main>
+
+    <footer id="footer" class="footer">
+      <div class="footer-inner">
+        <div class="copyright">&copy; <span itemprop="copyrightYear">2019</span>
+  <span class="with-love" id="animate">
+    <i class="fa fa-user"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">SUN</span>
+
+  
+
+  
+</div>
+
+
+  <div class="powered-by">Powered by <a href="https://hexo.io" class="theme-link" rel="noopener" target="_blank">Hexo</a> v3.8.0</div>
+
+
+
+  <span class="post-meta-divider">|</span>
+
+
+
+  <div class="theme-info">Theme – <a href="https://theme-next.org" class="theme-link" rel="noopener" target="_blank">NexT.Mist</a> v6.7.0</div>
+
+
+
+
+        
+<div class="busuanzi-count">
+  <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+
+  
+    <span class="post-meta-item-icon">
+      <i class="fa fa-user"></i>
+    </span>
+    <span class="site-uv" title="Total Visitors">
+      <span class="busuanzi-value" id="busuanzi_value_site_uv"></span>
+    </span>
+  
+
+  
+    <span class="post-meta-divider">|</span>
+  
+
+  
+    <span class="post-meta-item-icon">
+      <i class="fa fa-eye"></i>
+    </span>
+    <span class="site-pv" title="Total Views">
+      <span class="busuanzi-value" id="busuanzi_value_site_pv"></span>
+    </span>
+  
+</div>
+
+
+
+
+
+
+
+
+        
+      </div>
+    </footer>
+
+    
+      <div class="back-to-top">
+        <i class="fa fa-arrow-up"></i>
+        
+      </div>
+    
+
+    
+
+    
+
+    
+  </div>
+
+  
+
+<script>
+  if (Object.prototype.toString.call(window.Promise) !== '[object Function]') {
+    window.Promise = null;
+  }
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+  <script src="/lib/jquery/index.js?v=2.1.3"></script>
+
+  
+  <script src="/lib/velocity/velocity.min.js?v=1.2.1"></script>
+
+  
+  <script src="/lib/velocity/velocity.ui.min.js?v=1.2.1"></script>
+
+
+  
+
+
+  <script src="/js/src/utils.js?v=6.7.0"></script>
+
+  <script src="/js/src/motion.js?v=6.7.0"></script>
+
+
+
+  
+  
+
+  
+  <script src="/js/src/scrollspy.js?v=6.7.0"></script>
+<script src="/js/src/post-details.js?v=6.7.0"></script>
+
+
+
+  
+
+
+  <script src="/js/src/bootstrap.js?v=6.7.0"></script>
+
+
+
+  
+  
+  	<script>
+  window.livereOptions = {
+    refer: '2019/01/10/redis-blocking-pop/'
+  };
+  (function(d, s) {
+    var j, e = d.getElementsByTagName(s)[0];
+    if (typeof LivereTower === 'function') { return; }
+    j = d.createElement(s);
+    j.src = 'https://cdn-city.livere.com/js/embed.dist.js';
+    j.async = true;
+    e.parentNode.insertBefore(j, e);
+  })(document, 'script');
+</script>
+
+  
+
+
+  
+
+  <script>
+    // Popup Window;
+    var isfetched = false;
+    var isXml = true;
+    // Search DB path;
+    var search_path = "";
+    if (search_path.length === 0) {
+      search_path = "search.xml";
+    } else if (/json$/i.test(search_path)) {
+      isXml = false;
+    }
+    var path = "/" + search_path;
+    // monitor main search box;
+
+    var onPopupClose = function (e) {
+      $('.popup').hide();
+      $('#local-search-input').val('');
+      $('.search-result-list').remove();
+      $('#no-result').remove();
+      $(".local-search-pop-overlay").remove();
+      $('body').css('overflow', '');
+    }
+
+    function proceedsearch() {
+      $("body")
+        .append('<div class="search-popup-overlay local-search-pop-overlay"></div>')
+        .css('overflow', 'hidden');
+      $('.search-popup-overlay').click(onPopupClose);
+      $('.popup').toggle();
+      var $localSearchInput = $('#local-search-input');
+      $localSearchInput.attr("autocapitalize", "none");
+      $localSearchInput.attr("autocorrect", "off");
+      $localSearchInput.focus();
+    }
+
+    // search function;
+    var searchFunc = function(path, search_id, content_id) {
+      'use strict';
+
+      // start loading animation
+      $("body")
+        .append('<div class="search-popup-overlay local-search-pop-overlay">' +
+          '<div id="search-loading-icon">' +
+          '<i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>' +
+          '</div>' +
+          '</div>')
+        .css('overflow', 'hidden');
+      $("#search-loading-icon").css('margin', '20% auto 0 auto').css('text-align', 'center');
+
+      
+
+      $.ajax({
+        url: path,
+        dataType: isXml ? "xml" : "json",
+        async: true,
+        success: function(res) {
+          // get the contents from search data
+          isfetched = true;
+          $('.popup').detach().appendTo('.header-inner');
+          var datas = isXml ? $("entry", res).map(function() {
+            return {
+              title: $("title", this).text(),
+              content: $("content",this).text(),
+              url: $("url" , this).text()
+            };
+          }).get() : res;
+          var input = document.getElementById(search_id);
+          var resultContent = document.getElementById(content_id);
+          var inputEventFunction = function() {
+            var searchText = input.value.trim().toLowerCase();
+            var keywords = searchText.split(/[\s\-]+/);
+            if (keywords.length > 1) {
+              keywords.push(searchText);
+            }
+            var resultItems = [];
+            if (searchText.length > 0) {
+              // perform local searching
+              datas.forEach(function(data) {
+                var isMatch = false;
+                var hitCount = 0;
+                var searchTextCount = 0;
+                var title = data.title.trim();
+                var titleInLowerCase = title.toLowerCase();
+                var content = data.content.trim().replace(/<[^>]+>/g,"");
+                
+                var contentInLowerCase = content.toLowerCase();
+                var articleUrl = decodeURIComponent(data.url).replace(/\/{2,}/g, '/');
+                var indexOfTitle = [];
+                var indexOfContent = [];
+                // only match articles with not empty titles
+                if(title != '') {
+                  keywords.forEach(function(keyword) {
+                    function getIndexByWord(word, text, caseSensitive) {
+                      var wordLen = word.length;
+                      if (wordLen === 0) {
+                        return [];
+                      }
+                      var startPosition = 0, position = [], index = [];
+                      if (!caseSensitive) {
+                        text = text.toLowerCase();
+                        word = word.toLowerCase();
+                      }
+                      while ((position = text.indexOf(word, startPosition)) > -1) {
+                        index.push({position: position, word: word});
+                        startPosition = position + wordLen;
+                      }
+                      return index;
+                    }
+
+                    indexOfTitle = indexOfTitle.concat(getIndexByWord(keyword, titleInLowerCase, false));
+                    indexOfContent = indexOfContent.concat(getIndexByWord(keyword, contentInLowerCase, false));
+                  });
+                  if (indexOfTitle.length > 0 || indexOfContent.length > 0) {
+                    isMatch = true;
+                    hitCount = indexOfTitle.length + indexOfContent.length;
+                  }
+                }
+
+                // show search results
+
+                if (isMatch) {
+                  // sort index by position of keyword
+
+                  [indexOfTitle, indexOfContent].forEach(function (index) {
+                    index.sort(function (itemLeft, itemRight) {
+                      if (itemRight.position !== itemLeft.position) {
+                        return itemRight.position - itemLeft.position;
+                      } else {
+                        return itemLeft.word.length - itemRight.word.length;
+                      }
+                    });
+                  });
+
+                  // merge hits into slices
+
+                  function mergeIntoSlice(text, start, end, index) {
+                    var item = index[index.length - 1];
+                    var position = item.position;
+                    var word = item.word;
+                    var hits = [];
+                    var searchTextCountInSlice = 0;
+                    while (position + word.length <= end && index.length != 0) {
+                      if (word === searchText) {
+                        searchTextCountInSlice++;
+                      }
+                      hits.push({position: position, length: word.length});
+                      var wordEnd = position + word.length;
+
+                      // move to next position of hit
+
+                      index.pop();
+                      while (index.length != 0) {
+                        item = index[index.length - 1];
+                        position = item.position;
+                        word = item.word;
+                        if (wordEnd > position) {
+                          index.pop();
+                        } else {
+                          break;
+                        }
+                      }
+                    }
+                    searchTextCount += searchTextCountInSlice;
+                    return {
+                      hits: hits,
+                      start: start,
+                      end: end,
+                      searchTextCount: searchTextCountInSlice
+                    };
+                  }
+
+                  var slicesOfTitle = [];
+                  if (indexOfTitle.length != 0) {
+                    slicesOfTitle.push(mergeIntoSlice(title, 0, title.length, indexOfTitle));
+                  }
+
+                  var slicesOfContent = [];
+                  while (indexOfContent.length != 0) {
+                    var item = indexOfContent[indexOfContent.length - 1];
+                    var position = item.position;
+                    var word = item.word;
+                    // cut out 100 characters
+                    var start = position - 20;
+                    var end = position + 80;
+                    if(start < 0){
+                      start = 0;
+                    }
+                    if (end < position + word.length) {
+                      end = position + word.length;
+                    }
+                    if(end > content.length){
+                      end = content.length;
+                    }
+                    slicesOfContent.push(mergeIntoSlice(content, start, end, indexOfContent));
+                  }
+
+                  // sort slices in content by search text's count and hits' count
+
+                  slicesOfContent.sort(function (sliceLeft, sliceRight) {
+                    if (sliceLeft.searchTextCount !== sliceRight.searchTextCount) {
+                      return sliceRight.searchTextCount - sliceLeft.searchTextCount;
+                    } else if (sliceLeft.hits.length !== sliceRight.hits.length) {
+                      return sliceRight.hits.length - sliceLeft.hits.length;
+                    } else {
+                      return sliceLeft.start - sliceRight.start;
+                    }
+                  });
+
+                  // select top N slices in content
+
+                  var upperBound = parseInt('1');
+                  if (upperBound >= 0) {
+                    slicesOfContent = slicesOfContent.slice(0, upperBound);
+                  }
+
+                  // highlight title and content
+
+                  function highlightKeyword(text, slice) {
+                    var result = '';
+                    var prevEnd = slice.start;
+                    slice.hits.forEach(function (hit) {
+                      result += text.substring(prevEnd, hit.position);
+                      var end = hit.position + hit.length;
+                      result += '<b class="search-keyword">' + text.substring(hit.position, end) + '</b>';
+                      prevEnd = end;
+                    });
+                    result += text.substring(prevEnd, slice.end);
+                    return result;
+                  }
+
+                  var resultItem = '';
+
+                  if (slicesOfTitle.length != 0) {
+                    resultItem += "<li><a href='" + articleUrl + "' class='search-result-title'>" + highlightKeyword(title, slicesOfTitle[0]) + "</a>";
+                  } else {
+                    resultItem += "<li><a href='" + articleUrl + "' class='search-result-title'>" + title + "</a>";
+                  }
+
+                  slicesOfContent.forEach(function (slice) {
+                    resultItem += "<a href='" + articleUrl + "'>" +
+                      "<p class=\"search-result\">" + highlightKeyword(content, slice) +
+                      "...</p>" + "</a>";
+                  });
+
+                  resultItem += "</li>";
+                  resultItems.push({
+                    item: resultItem,
+                    searchTextCount: searchTextCount,
+                    hitCount: hitCount,
+                    id: resultItems.length
+                  });
+                }
+              })
+            };
+            if (keywords.length === 1 && keywords[0] === "") {
+              resultContent.innerHTML = '<div id="no-result"><i class="fa fa-search fa-5x"></i></div>'
+            } else if (resultItems.length === 0) {
+              resultContent.innerHTML = '<div id="no-result"><i class="fa fa-frown-o fa-5x"></i></div>'
+            } else {
+              resultItems.sort(function (resultLeft, resultRight) {
+                if (resultLeft.searchTextCount !== resultRight.searchTextCount) {
+                  return resultRight.searchTextCount - resultLeft.searchTextCount;
+                } else if (resultLeft.hitCount !== resultRight.hitCount) {
+                  return resultRight.hitCount - resultLeft.hitCount;
+                } else {
+                  return resultRight.id - resultLeft.id;
+                }
+              });
+              var searchResultList = '<ul class=\"search-result-list\">';
+              resultItems.forEach(function (result) {
+                searchResultList += result.item;
+              })
+              searchResultList += "</ul>";
+              resultContent.innerHTML = searchResultList;
+            }
+          }
+
+          if ('auto' === 'auto') {
+            input.addEventListener('input', inputEventFunction);
+          } else {
+            $('.search-icon').click(inputEventFunction);
+            input.addEventListener('keypress', function (event) {
+              if (event.keyCode === 13) {
+                inputEventFunction();
+              }
+            });
+          }
+
+          // remove loading animation
+          $(".local-search-pop-overlay").remove();
+          $('body').css('overflow', '');
+
+          proceedsearch();
+        }
+      });
+    }
+
+    // handle and trigger popup window;
+    $('.popup-trigger').click(function(e) {
+      e.stopPropagation();
+      if (isfetched === false) {
+        searchFunc(path, 'local-search-input', 'local-search-result');
+      } else {
+        proceedsearch();
+      };
+    });
+
+    $('.popup-btn-close').click(onPopupClose);
+    $('.popup').click(function(e){
+      e.stopPropagation();
+    });
+    $(document).on('keyup', function (event) {
+      var shouldDismissSearchPopup = event.which === 27 &&
+        $('.search-popup').is(':visible');
+      if (shouldDismissSearchPopup) {
+        onPopupClose();
+      }
+    });
+  </script>
+
+
+
+
+  
+  
+  
+  <link rel="stylesheet" href="/lib/algolia-instant-search/instantsearch.min.css">
+
+  
+  
+  <script src="/lib/algolia-instant-search/instantsearch.min.js"></script>
+  
+
+  <script src="/js/src/algolia-search.js?v=6.7.0"></script>
+
+
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+</body>
+</html>
